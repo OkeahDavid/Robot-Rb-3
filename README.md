@@ -6,3 +6,5 @@ Below you can see the source i worked with:
 
 and then below is the result of the project:
 ![image](https://user-images.githubusercontent.com/82973470/217368798-0eb06cc5-2272-417e-8684-541dd45e7b7e.png)
+
+This project also allowed for simple rotation of the view of the model along the x- and y-axis
