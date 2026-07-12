@@ -4,12 +4,15 @@ A 3D model of the RB-3 industrial robot, originally built as a school project in
 
 ## Live web version (three.js)
 
-Open `index.html` via any static server — no build step required:
+Built with [three.js](https://threejs.org/) and bundled with [Parcel](https://parceljs.org/):
 
 ```bash
-python -m http.server 4173
-# then visit http://localhost:4173
+npm install
+npm start        # dev server at http://localhost:1234
+npm run build    # production build to dist/
 ```
+
+To deploy (e.g. Netlify): build command `npm run build`, publish directory `dist`.
 
 ### Features
 
