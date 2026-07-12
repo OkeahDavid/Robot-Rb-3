@@ -2,6 +2,10 @@
 
 A 3D model of the RB-3 industrial robot, originally built as a school project in C++ (MFC + legacy OpenGL / glaux), now remade as an interactive web app with [three.js](https://threejs.org/).
 
+**▶ Live demo: [rb-3.netlify.app](https://rb-3.netlify.app/)**
+
+![Robot RB-3 running the pick & place routine](screenshot.png)
+
 ## Live web version (three.js)
 
 Built with [three.js](https://threejs.org/) and bundled with [Parcel](https://parceljs.org/):
