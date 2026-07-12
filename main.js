@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import GUI from 'lil-gui';
 
 // ---------------------------------------------------------------------------
@@ -36,6 +40,17 @@ controls.maxDistance = 24;
 
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+// ---------------------------------------------------------------------------
+// Post-processing (bloom)
+// ---------------------------------------------------------------------------
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.5, 0.7
+);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
 
 // ---------------------------------------------------------------------------
 // Lights
@@ -90,6 +105,7 @@ const MAT = {
   dark:   new THREE.MeshStandardMaterial({ color: 0x23262e, roughness: 0.5,  metalness: 0.7 }),
   steel:  new THREE.MeshStandardMaterial({ color: 0x9aa2ad, roughness: 0.3,  metalness: 0.9 }),
   accent: new THREE.MeshStandardMaterial({ color: 0x30d17c, roughness: 0.4,  metalness: 0.3, emissive: 0x0a3d22 }),
+  crate:  new THREE.MeshStandardMaterial({ color: 0x4d7cff, roughness: 0.45, metalness: 0.35 }),
 };
 
 function mesh(geo, mat) {
@@ -191,8 +207,9 @@ const cone = mesh(new THREE.ConeGeometry(0.34, 0.75, 32), MAT.accent);
 cone.position.y = 0.75;
 toolJoint.add(cone);
 
+const TOOL_LEN = 1.15; // wrist center to tool tip
 const tip = new THREE.Object3D();
-tip.position.y = 1.15;
+tip.position.y = TOOL_LEN;
 toolJoint.add(tip);
 
 const tipGlow = new THREE.Mesh(
@@ -201,6 +218,135 @@ const tipGlow = new THREE.Mesh(
 );
 tipGlow.position.copy(tip.position);
 toolJoint.add(tipGlow);
+
+const SHOULDER_Y = 0.83 + 1.05; // world height of the shoulder pivot
+
+// ---------------------------------------------------------------------------
+// Pick & place props — two pallets and a crate the arm ferries between them
+// ---------------------------------------------------------------------------
+const PALLET_R = 3.2;
+const PALLET_ANGLES = [40, -40]; // degrees around the base
+const pallets = PALLET_ANGLES.map((deg) => {
+  const a = deg * Math.PI / 180;
+  const g = new THREE.Group();
+  g.position.set(Math.cos(a) * PALLET_R, 0, Math.sin(a) * PALLET_R);
+  const base = mesh(new THREE.BoxGeometry(1.15, 0.12, 1.15), MAT.dark);
+  base.position.y = 0.06;
+  g.add(base);
+  const plate = mesh(new THREE.BoxGeometry(1.25, 0.03, 1.25), MAT.orange);
+  plate.position.y = 0.135;
+  g.add(plate);
+  scene.add(g);
+  return g;
+});
+
+const CRATE = 0.55;
+const PALLET_TOP = 0.15;
+const CRATE_REST_Y = PALLET_TOP + CRATE / 2;
+const CRATE_TOP_Y = PALLET_TOP + CRATE;   // tip height when gripping
+const HOVER_Y = CRATE_TOP_Y + 0.9;        // tip height when travelling
+
+const crate = mesh(new THREE.BoxGeometry(CRATE, CRATE, CRATE), MAT.crate);
+scene.add(crate);
+let pickIdx = 0;   // pallet the crate currently sits on
+let carrying = false;
+
+function restCrate(idx) {
+  scene.attach(crate);
+  crate.position.set(pallets[idx].position.x, CRATE_REST_Y, pallets[idx].position.z);
+  crate.rotation.set(0, 0, 0);
+  carrying = false;
+}
+restCrate(pickIdx);
+
+// ---------------------------------------------------------------------------
+// Inverse kinematics — closed-form 2-link solver in the yaw plane, tool
+// pointing straight down. Returns joint angles in degrees.
+// ---------------------------------------------------------------------------
+const DEG = Math.PI / 180;
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+function ikPose(tx, tipY, tz) {
+  const R = Math.hypot(tx, tz);
+  const yaw = Math.atan2(-tz, tx);
+  const V = (tipY + TOOL_LEN) - SHOULDER_Y; // wrist height relative to shoulder
+  const d = clamp(Math.hypot(R, V), 0.6, L1 + L2 - 0.02);
+  const gamma = Math.atan2(R, V);
+  const delta = Math.acos(clamp((L1 * L1 + d * d - L2 * L2) / (2 * L1 * d), -1, 1));
+  const k = Math.acos(clamp((L1 * L1 + L2 * L2 - d * d) / (2 * L1 * L2), -1, 1));
+  const aS = gamma - delta;      // upper arm from vertical (elbow-up solution)
+  const aE = Math.PI - k;        // elbow bend
+  const aW = Math.PI - aS - aE;  // keeps the tool vertical
+  return {
+    baseYaw: yaw / DEG,
+    shoulder: -aS / DEG,
+    elbow: -aE / DEG,
+    wrist: -aW / DEG,
+    toolRoll: 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Pick & place task — joint-space waypoints with eased interpolation
+// ---------------------------------------------------------------------------
+const JOINT_KEYS = ['baseYaw', 'shoulder', 'elbow', 'wrist', 'toolRoll'];
+const task = { segs: [], i: 0, t: 0, from: null };
+
+function palletTip(idx, y) {
+  const p = pallets[idx].position;
+  return ikPose(p.x, y, p.z);
+}
+
+function buildCycle() {
+  const P = pickIdx, Q = 1 - pickIdx;
+  task.segs = [
+    { pose: palletTip(P, HOVER_Y), dur: 1.6 },
+    { pose: palletTip(P, CRATE_TOP_Y), dur: 1.0, onArrive: grab },
+    { pose: palletTip(P, CRATE_TOP_Y), dur: 0.35 },
+    { pose: palletTip(P, HOVER_Y), dur: 0.9 },
+    { pose: palletTip(Q, HOVER_Y), dur: 1.8 },
+    { pose: palletTip(Q, CRATE_TOP_Y), dur: 1.0, onArrive: release },
+    { pose: palletTip(Q, CRATE_TOP_Y), dur: 0.35 },
+    { pose: palletTip(Q, HOVER_Y), dur: 0.9, onArrive: () => { pickIdx = Q; buildCycle(); } },
+  ];
+  task.i = 0;
+  task.t = 0;
+  task.from = null;
+}
+
+function grab() {
+  toolJoint.attach(crate);
+  carrying = true;
+}
+
+function release() {
+  restCrate(1 - pickIdx);
+}
+
+function resetTask() {
+  restCrate(pickIdx);
+  buildCycle();
+}
+
+const ease = (u) => u * u * (3 - 2 * u);
+
+function stepTask(dt) {
+  if (task.i >= task.segs.length) return;
+  const seg = task.segs[task.i];
+  if (!task.from) task.from = JOINT_KEYS.reduce((o, k) => (o[k] = params[k], o), {});
+  task.t += dt;
+  const u = ease(clamp(task.t / seg.dur, 0, 1));
+  for (const k of JOINT_KEYS) {
+    params[k] = task.from[k] + (seg.pose[k] - task.from[k]) * u;
+  }
+  if (task.t >= seg.dur) {
+    for (const k of JOINT_KEYS) params[k] = seg.pose[k];
+    if (seg.onArrive) seg.onArrive();
+    task.i++;
+    task.t = 0;
+    task.from = null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Tool-tip trail
@@ -240,51 +386,66 @@ function clearTrail() {
 // ---------------------------------------------------------------------------
 // State + GUI
 // ---------------------------------------------------------------------------
+const MODES = ['pick & place', 'free cycle', 'manual'];
+
 const params = {
   baseYaw: 0,
   shoulder: -28,
   elbow: 62,
   wrist: 45,
   toolRoll: 0,
-  animate: true,
+  mode: 'pick & place',
   speed: 1.0,
   trail: true,
+  bloom: true,
   wireframe: false,
   autoOrbit: false,
   resetPose() {
     Object.assign(params, { baseYaw: 0, shoulder: -28, elbow: 62, wrist: 45, toolRoll: 0 });
-    joints.forEach((c) => c.updateDisplay());
+    setMode('manual');
+    gui.controllersRecursive().forEach((c) => c.updateDisplay());
     clearTrail();
   },
 };
+
+function setMode(m) {
+  if (params.mode === 'pick & place' && m !== 'pick & place') restCrate(pickIdx);
+  params.mode = m;
+  if (m === 'pick & place') resetTask();
+  clearTrail();
+}
 
 const gui = new GUI({ title: 'RB-3 CONTROL' });
 const jointFolder = gui.addFolder('Joints (deg)');
 const joints = [
   jointFolder.add(params, 'baseYaw', -180, 180, 1).name('J1 base yaw'),
-  jointFolder.add(params, 'shoulder', -90, 45, 1).name('J2 shoulder'),
-  jointFolder.add(params, 'elbow', -10, 130, 1).name('J3 elbow'),
-  jointFolder.add(params, 'wrist', -90, 90, 1).name('J4 wrist'),
+  jointFolder.add(params, 'shoulder', -100, 100, 1).name('J2 shoulder'),
+  jointFolder.add(params, 'elbow', -135, 135, 1).name('J3 elbow'),
+  jointFolder.add(params, 'wrist', -120, 120, 1).name('J4 wrist'),
   jointFolder.add(params, 'toolRoll', -180, 180, 1).name('J5 tool roll'),
 ];
-joints.forEach((c) => c.onChange(() => { params.animate = false; animCtrl.updateDisplay(); }));
+joints.forEach((c) => c.onChange(() => {
+  if (params.mode !== 'manual') { setMode('manual'); modeCtrl.updateDisplay(); }
+}));
 
 const motionFolder = gui.addFolder('Motion');
-const animCtrl = motionFolder.add(params, 'animate').name('auto cycle');
+const modeCtrl = motionFolder.add(params, 'mode', MODES).name('mode').onChange((m) => setMode(m));
 motionFolder.add(params, 'speed', 0.2, 3, 0.1).name('speed');
 motionFolder.add(params, 'resetPose').name('reset pose');
 
 const viewFolder = gui.addFolder('View');
 viewFolder.add(params, 'trail').name('tool trail').onChange((v) => { if (!v) clearTrail(); trail.visible = v; });
+viewFolder.add(params, 'bloom').name('bloom');
 viewFolder.add(params, 'wireframe').name('wireframe (1998 mode)').onChange((v) => {
   Object.values(MAT).forEach((m) => (m.wireframe = v));
 });
 viewFolder.add(params, 'autoOrbit').name('orbit camera');
 
+if (window.innerWidth < 700) gui.close();
+
 // ---------------------------------------------------------------------------
 // Animation loop
 // ---------------------------------------------------------------------------
-const DEG = Math.PI / 180;
 const clock = new THREE.Clock();
 let t = 0;
 
@@ -300,9 +461,10 @@ function applyPose() {
 
 function animate() {
   requestAnimationFrame(animate);
-  const dt = clock.getDelta();
+  const dt = Math.min(clock.getDelta(), 0.1);
+  const animating = params.mode !== 'manual';
 
-  if (params.animate) {
+  if (params.mode === 'free cycle') {
     t += dt * params.speed;
     const r = (x) => Math.round(x * 10) / 10;
     params.baseYaw = r(Math.sin(t * 0.35) * 70);
@@ -310,12 +472,14 @@ function animate() {
     params.elbow = r(60 + Math.sin(t * 0.6 + 1.3) * 35);
     params.wrist = r(40 + Math.sin(t * 1.1 + 0.6) * 30);
     params.toolRoll = r((t * 40) % 360 - 180);
-    joints.forEach((c) => c.updateDisplay());
+  } else if (params.mode === 'pick & place') {
+    stepTask(dt * params.speed);
   }
+  if (animating) joints.forEach((c) => c.updateDisplay());
 
   applyPose();
 
-  if (params.trail && params.animate) pushTrailPoint();
+  if (params.trail && animating) pushTrailPoint();
   if (params.autoOrbit) {
     const a = clock.elapsedTime * 0.12;
     camera.position.x = Math.sin(a) * 13;
@@ -323,7 +487,8 @@ function animate() {
   }
 
   controls.update();
-  renderer.render(scene, camera);
+  if (params.bloom) composer.render();
+  else renderer.render(scene, camera);
 
   tip.getWorldPosition(tipWorld);
   readout.textContent =
@@ -331,14 +496,17 @@ function animate() {
     `J2 ${params.shoulder.toFixed(0).padStart(4)}°  ` +
     `J3 ${params.elbow.toFixed(0).padStart(4)}°  ` +
     `J4 ${params.wrist.toFixed(0).padStart(4)}°\n` +
-    `TCP  x ${tipWorld.x.toFixed(2)}  y ${tipWorld.y.toFixed(2)}  z ${tipWorld.z.toFixed(2)}`;
+    `TCP  x ${tipWorld.x.toFixed(2)}  y ${tipWorld.y.toFixed(2)}  z ${tipWorld.z.toFixed(2)}` +
+    (carrying ? '   [CARRYING]' : '');
 }
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 });
 
+buildCycle();
 applyPose();
 animate();

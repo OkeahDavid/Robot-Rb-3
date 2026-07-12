@@ -14,7 +14,9 @@ python -m http.server 4173
 ### Features
 
 - **Fully articulated arm** — 5 controllable joints (base yaw, shoulder, elbow, wrist, tool roll) instead of the original's fixed pose
-- **Auto motion cycle** — the robot runs a smooth demo routine, with a glowing trail tracing the tool center point
+- **Pick & place mode** — a closed-form inverse-kinematics solver drives the arm to ferry a crate between two pallets, gripping and releasing it in a continuous loop
+- **Free motion cycle** — a smooth demo routine, with a glowing trail tracing the tool center point
+- **Bloom post-processing** — the tool tip, trail and highlights glow (toggleable, in case your GPU disagrees)
 - **Live TCP readout** — joint angles and tool tip coordinates update in real time
 - **PBR materials, soft shadows and environment lighting** — industrial-orange finish with a proper studio look
 - **Orbit camera** — drag to rotate, scroll to zoom (the original only rotated via window scrollbars)
