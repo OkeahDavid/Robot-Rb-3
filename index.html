@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Robot RB-3 — three.js</title>
+  <meta name="description" content="Interactive 3D simulation of the RB-3 industrial robot arm — articulated joints, pick-and-place routine, and orbit camera. A three.js remake of a classic C++/OpenGL school project." />
+  <meta name="theme-color" content="#0b0e14" />
+  <meta property="og:title" content="Robot RB-3 — interactive three.js simulation" />
+  <meta property="og:description" content="A fully articulated industrial robot arm running a pick-and-place routine in your browser. Remake of a classic C++/OpenGL school project." />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A6%BE%3C/text%3E%3C/svg%3E" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; background: #0b0e14; }
+    #app { width: 100%; height: 100%; }
+    #hud {
+      position: fixed; top: 20px; left: 24px; pointer-events: none;
+      font-family: 'Segoe UI', system-ui, sans-serif; color: #e8e9ec;
+      user-select: none;
+    }
+    #hud h1 {
+      font-size: 22px; font-weight: 700; letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+    #hud h1 span { color: #ff7a1a; }
+    #hud p {
+      margin-top: 4px; font-size: 12px; letter-spacing: 1px;
+      color: #8a8f9c;
+    }
+    #readout {
+      position: fixed; bottom: 18px; left: 24px; pointer-events: none;
+      font-family: 'Consolas', 'Courier New', monospace; font-size: 12px;
+      color: #5ad18c; line-height: 1.6; user-select: none; white-space: pre;
+      text-shadow: 0 0 8px rgba(90, 209, 140, 0.35);
+    }
+    @media (max-width: 640px) {
+      #hud { top: 12px; left: 14px; }
+      #hud h1 { font-size: 16px; letter-spacing: 2px; }
+      #hud p { font-size: 10px; }
+      #readout { left: 14px; bottom: 12px; font-size: 10px; }
+      .lil-gui.root { --width: 210px; font-size: 11px; }
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/",
+        "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/+esm"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="hud">
+    <h1>Robot <span>RB-3</span></h1>
+    <p>industrial arm &middot; three.js remake &middot; drag to orbit</p>
+  </div>
+  <div id="readout"></div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
